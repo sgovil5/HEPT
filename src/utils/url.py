@@ -2,6 +2,7 @@
 
 import urllib.request as ur
 import zipfile
+import tarfile
 import os
 import os.path as osp
 import errno
@@ -86,3 +87,16 @@ def extract_zip(path, folder, log=True):
     maybe_log(path, log)
     with zipfile.ZipFile(path, "r") as f:
         f.extractall(folder)
+
+def extract_tar(path, folder, log=True):
+    r"""Extracts a tar archive to a specific folder.
+    Args:
+        path (string): The path to the tar archive.
+        folder (string): The folder.
+        log (bool, optional): If :obj:`False`, will not print anything to the
+            console. (default: :obj:`True`)
+    """
+    maybe_log(path, log)
+    with tarfile.open(path, "r:*") as f:
+        f.extractall(folder)
+
