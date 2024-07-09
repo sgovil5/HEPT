@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import torch_geometric
 from torch.optim.lr_scheduler import LambdaLR
 from torch_geometric.utils import unbatch
 from torchmetrics import MeanMetric
@@ -11,43 +12,87 @@ from tqdm import tqdm
 def train_one_batch(model, optimizer, criterion, data, lr_s):
     model.train()
     embeddings = model(data.x, data.coords, data.batch)
-    loss = criterion(embeddings, data.point_pairs_index, data.particle_id, data.reconstructable, data.pt)
-
+    embeddings = torch_geometric.nn.global_mean_pool(embeddings, data.batch)
+    # loss = criterion(embeddings, data.point_pairs_index, data.particle_id, data.reconstructable, data.pt)
+    y = data.y.float().unsqueeze(0)
+    loss = criterion(embeddings, y)
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
     if lr_s is not None and isinstance(lr_s, LambdaLR):
         lr_s.step()
-    return loss.item(), embeddings.detach(), data.particle_id.detach()
+    # return loss.item(), embeddings.detach(), data.particle_id.detach()
+    return loss.item(), embeddings.detach()
 
 
 @torch.no_grad()
 def eval_one_batch(model, optimizer, criterion, data, lr_s):
     model.eval()
     embeddings = model(data.x, data.coords, data.batch)
-    loss = criterion(embeddings, data.point_pairs_index, data.particle_id, data.reconstructable, data.pt)
+    #loss = criterion(embeddings, data.point_pairs_index, data.particle_id, data.reconstructable, data.pt)
+    loss = criterion(embeddings, data.y)
     return loss.item(), embeddings.detach(), data.particle_id.detach()
 
+
+# def run_one_epoch(model, optimizer, criterion, data_loader, phase, epoch, device, metrics, lr_s):
+#     run_one_batch = train_one_batch if phase == "train" else eval_one_batch
+#     phase = "test " if phase == "test" else phase
+#     pbar = tqdm(data_loader)
+#     for idx, data in enumerate(pbar):
+#         data = data.to(device)
+#         batch_loss, batch_embeddings, batch_cluster_ids = run_one_batch(model, optimizer, criterion, data, lr_s)
+#         batch_acc = update_metrics(metrics, data, batch_embeddings, batch_cluster_ids, criterion.dist_metric)
+#         metrics["loss"].update(batch_loss)
+
+#         desc = f"[Epoch {epoch}] {phase}, loss: {batch_loss:.4f}, acc: {batch_acc:.4f}"
+#         if idx == len(data_loader) - 1:
+#             metric_res = compute_metrics(metrics)
+#             loss, acc = (metric_res["loss"], metric_res["accuracy@0.9"])
+#             prec, recall = metric_res["precision@0.9"], metric_res["recall@0.9"]
+#             desc = f"[Epoch {epoch}] {phase}, loss: {loss:.4f}, acc: {acc:.4f}, prec: {prec:.4f}, recall: {recall:.4f}"
+#             reset_metrics(metrics)
+#         pbar.set_description(desc)
+#     return metric_res
 
 def run_one_epoch(model, optimizer, criterion, data_loader, phase, epoch, device, metrics, lr_s):
     run_one_batch = train_one_batch if phase == "train" else eval_one_batch
     phase = "test " if phase == "test" else phase
     pbar = tqdm(data_loader)
+    total_loss = 0
+    total_correct = 0
+    total_samples = 0
+
     for idx, data in enumerate(pbar):
         data = data.to(device)
-        batch_loss, batch_embeddings, batch_cluster_ids = run_one_batch(model, optimizer, criterion, data, lr_s)
-        batch_acc = update_metrics(metrics, data, batch_embeddings, batch_cluster_ids, criterion.dist_metric)
+        batch_loss, batch_embeddings = run_one_batch(model, optimizer, criterion, data, lr_s)
+        
+        # Calculate accuracy
+        predicted = torch.argmax(batch_embeddings, dim=1)
+        actual = data.y 
+        correct = (predicted == actual).sum().item()
+        
+        total_loss += batch_loss
+        total_correct += correct
+        total_samples += data.y.size(0)
+        
+        batch_acc = correct / data.y.size(0)
+        
         metrics["loss"].update(batch_loss)
+        metrics["accuracy"].update(batch_acc)
 
         desc = f"[Epoch {epoch}] {phase}, loss: {batch_loss:.4f}, acc: {batch_acc:.4f}"
         if idx == len(data_loader) - 1:
-            metric_res = compute_metrics(metrics)
-            loss, acc = (metric_res["loss"], metric_res["accuracy@0.9"])
-            prec, recall = metric_res["precision@0.9"], metric_res["recall@0.9"]
-            desc = f"[Epoch {epoch}] {phase}, loss: {loss:.4f}, acc: {acc:.4f}, prec: {prec:.4f}, recall: {recall:.4f}"
+            avg_loss = total_loss / len(data_loader)
+            avg_acc = total_correct / total_samples
+            desc = f"[Epoch {epoch}] {phase}, loss: {avg_loss:.4f}, acc: {avg_acc:.4f}"
             reset_metrics(metrics)
         pbar.set_description(desc)
+    
+    metric_res = {
+        "loss": total_loss / len(data_loader),
+        "accuracy": total_correct / total_samples
+    }
     return metric_res
 
 
@@ -84,12 +129,17 @@ def update_metrics(metrics, data, batch_embeddings, batch_cluster_ids, dist_metr
 
 
 def init_metrics(dataset_name):
-    assert "tracking" in dataset_name
-    pt_thres = [0, 0.5, 0.9]
-    metric_names = ["accuracy", "precision", "recall"]
-    metrics = {f"{name}@{pt}": MeanMetric(nan_strategy="error") for name in metric_names for pt in pt_thres}
-    metrics["loss"] = MeanMetric(nan_strategy="error")
-    metrics["pt_thres"] = pt_thres
+    if("tracking" in dataset_name):
+        pt_thres = [0, 0.5, 0.9]
+        metric_names = ["accuracy", "precision", "recall"]
+        metrics = {f"{name}@{pt}": MeanMetric(nan_strategy="error") for name in metric_names for pt in pt_thres}
+        metrics["loss"] = MeanMetric(nan_strategy="error")
+        metrics["pt_thres"] = pt_thres
+    else:
+        metrics = {
+            "loss": MeanMetric(nan_strategy="error"),
+            "accuracy": MeanMetric(nan_strategy="error")
+        }
     return metrics
 
 

@@ -1,5 +1,5 @@
 from torch_geometric.loader import DataLoader
-from datasets import Tracking, TrackingTransform, Pileup, PileupTransform
+from datasets import Tracking, TrackingTransform, Pileup, PileupTransform, JetClass, JetClassTransform
 
 
 def get_data_loader(dataset, idx_split, batch_size):
@@ -26,6 +26,8 @@ def get_dataset(dataset_name, data_dir):
         dataset = Tracking(data_dir, transform=TrackingTransform(), dataset_name=dataset_name)
     elif dataset_name == "pileup":
         dataset = Pileup(data_dir, transform=PileupTransform())
+    elif dataset_name == "jetclass":
+        dataset = JetClass(data_dir, transform=JetClassTransform())
     else:
         raise NotImplementedError
     dataset.dataset_name = dataset_name

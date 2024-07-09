@@ -1,6 +1,7 @@
 import math
 import torch
 from torch import nn
+import torch_geometric.nn as geo_nn
 from torch_geometric.nn import MLP
 from hept import HEPTAttention
 from einops import rearrange
@@ -102,6 +103,8 @@ class Transformer(nn.Module):
         self.helper_params["regions"] = self.regions
         self.helper_params["num_heads"] = kwargs["num_heads"]
 
+        # self.global_pool = geo_nn.global_mean_pool
+
         if self.num_classes:
             self.out_proj = nn.Linear(int(self.h_dim // 2), num_classes)
 
@@ -125,6 +128,8 @@ class Transformer(nn.Module):
 
         if self.num_classes:
             out = self.out_proj(out)
+            # out = geo_nn.global_mean_pool(out, batch)
+
         return out[unpad_seq]
 
 

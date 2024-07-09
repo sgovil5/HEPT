@@ -41,7 +41,7 @@ def get_loss(loss_name, loss_kwargs):
     if loss_name == "infonce":
         return InfoNCELoss(**loss_kwargs)
     elif loss_name == "crossentropy":
-        return torch.nn.BCELoss()
+        return torch.nn.CrossEntropyLoss()
     elif loss_name == "focal":
         return FocalLoss()
     else:

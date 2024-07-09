@@ -1,37 +1,43 @@
 import sys
-from dataloader import read_file
+from .dataloader import read_file
 
 import os
 import random
 import os.path as osp
 import numpy as np
+import pandas as pd
 import torch
 from torch_geometric.data import Data, InMemoryDataset
+from torch_geometric.transforms import BaseTransform
 sys.path.append("../../")
 from utils import set_seed
 from utils import download_url, extract_tar, decide_download 
 
-class JetTagTransform(BaseTransform):
+class JetClassTransform(BaseTransform):
     def __call__(self, data):
-        data.coords = torch.cat([data.pos, data.x[:, :2]], dim=-1)
+        eta = data.x[1, :]  # Index 1 for `part_eta`
+        phi = data.x[2, :]  # Index 2 for `part_phi`
+        
+        data.pos = torch.stack([eta, phi])
+        data.coords = torch.cat([data.pos, data.x[[0, 3], :]]).T # indexes 0 and 3 represent part_pt, part_energy
+        data.pos = data.pos.T
+        data.x = data.x.T
         return data
 
-class JetTag(InMemoryDataset):
+class JetClass(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None, seed=42):
         set_seed(seed)
         self.url_raw = "https://zenodo.org/records/6619768/files/JetClass_Pythia_val_5M.tar"
-        super(JetTag, self).__init__(root, transform, pre_transform)
+        super(JetClass, self).__init__(root, transform, pre_transform)
         loaded_data = torch.load(self.processed_paths[0])
-        print("Loaded data contents:", loaded_data)
         if isinstance(loaded_data, tuple) and len(loaded_data) == 3:
             self.data, self.slices, self.idx_split = loaded_data
         else:
             raise ValueError("Unexpected data format in the processed file")
         self.x_dim = self._data.x.shape[1]
-        # TODO: add coord_dim
-        self.coord_dim = 2 + 2 # (pt, eta, phi, energy)
+        self.coords_dim = 2 + 2 # (pt, eta, phi, energy)
 
-    def download(self)
+    def download(self):
         warning = "This dataset will need 7.6 GB of space. Do you want to proceed? (y/n) \n"
         if osp.exists(self.processed_paths[0]):
             return
@@ -98,5 +104,5 @@ if __name__ == "__main__":
     relative_path = '../../../data/jetclass'
     absolute_path = os.path.abspath(relative_path)
     root = absolute_path
-    dataset = JetTag(root)
-
+    dataset = JetClass(root)
+    
