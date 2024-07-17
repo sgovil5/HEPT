@@ -3,6 +3,7 @@ from .dataloader import read_file
 
 import os
 import random
+from math import floor
 import os.path as osp
 import numpy as np
 import pandas as pd
@@ -34,7 +35,7 @@ class JetClass(InMemoryDataset):
             self.data, self.slices, self.idx_split = loaded_data
         else:
             raise ValueError("Unexpected data format in the processed file")
-        self.x_dim = self._data.x.shape[1]
+        self.x_dim = 4
         self.coords_dim = 2 + 2 # (pt, eta, phi, energy)
 
     def download(self):
@@ -54,15 +55,13 @@ class JetClass(InMemoryDataset):
         all_data = []
         for filepath in self.raw_paths:
             x_particles, x_jet, y = read_file(filepath)
-            x_jet = torch.from_numpy(x_jet).unsqueeze(-1)
+            # x_jet = torch.from_numpy(x_jet).unsqueeze(-1)
             x_particles = torch.from_numpy(x_particles)
             y = torch.from_numpy(y)
             # x_combined = torch.cat((x_particles, x_jet), dim=2) # uncomment if we want to use jets in dataset
-            for i in range(x_particles.shape[0]):
+            for i in range(floor(x_particles.shape[0]/2500)):
                 sample_data = Data(x=x_particles[i], y=y[i])
                 all_data.append(sample_data)
-
-        # TEMPORARY MEASURES FOR JUST USING 1 DATASET
 
         #shuffle data
         random.shuffle(all_data)
@@ -90,7 +89,9 @@ class JetClass(InMemoryDataset):
         return {"train": train_idx, "valid": valid_idx, "test": test_idx}
 
     def raw_file_names(self):
-        return ["val_5M/HToBB_120.root"]
+        raw_dir = os.path.join(self.root, 'raw', 'val_5M')
+        return [os.path.join('val_5M', f) for f in os.listdir(raw_dir) if f.endswith('.root')]
+        # return ["val_5M/HToBB_120.root", "val_5M/TTBarLep_121.root"]
 
     def processed_file_names(self):
         return ["data.pt"]

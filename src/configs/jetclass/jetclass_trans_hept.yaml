@@ -1,4 +1,4 @@
-device: cuda:3
+device: cuda:0
 note: "N/A"
 seed: 42
 log_tensorboard: false
@@ -9,16 +9,17 @@ model_name: trans_hept
 model_kwargs:
   block_size: 100
   n_hashes: 3
-  num_regions: 140
+  num_regions: 150
   pe_type: none
   num_heads: 8
   h_dim: 24
   n_layers: 4
   num_w_per_dist: 10
+  num_classes: 10
 
 
 loss_name: crossentropy
-
+loss_kwargs: None
 
 optimizer_name: adam
 num_epochs: 200
@@ -37,5 +38,5 @@ lr_scheduler_kwargs:
 
 data_dir: ../data/
 dataset_name: jetclass
-main_metric: auc
+main_metric: accuracy
 mode: max

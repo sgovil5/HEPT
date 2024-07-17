@@ -69,6 +69,7 @@ class Transformer(nn.Module):
         self.attn_type = attn_type
         self.n_layers = kwargs["n_layers"]
         self.h_dim = kwargs["h_dim"]
+        self.num_classes = kwargs["num_classes"]
         self.task = task
         self.use_ckpt = kwargs.get("use_ckpt", False)
 
@@ -114,6 +115,9 @@ class Transformer(nn.Module):
 
         if self.task == "pileup":
             self.out_proj = nn.Linear(int(self.h_dim // 2), 1)
+        
+        if self.num_classes:
+            self.out_proj = nn.Linear(int(self.h_dim // 2), self.num_classes)
 
     def forward(self, data):
         if isinstance(data, dict):
@@ -153,6 +157,9 @@ class Transformer(nn.Module):
         if self.task == "pileup":
             out = self.out_proj(out)
             out = torch.sigmoid(out)
+        
+        if self.num_classes:
+            out = self.out_proj(out)
 
         return out
 

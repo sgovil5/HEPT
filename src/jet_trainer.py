@@ -1,4 +1,5 @@
 import nni
+import sys
 import yaml
 import argparse
 from tqdm import tqdm
@@ -8,6 +9,7 @@ from datetime import datetime
 
 import numpy as np
 import torch
+import torch_geometric
 from torchmetrics import MeanMetric
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR
@@ -15,46 +17,70 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau, LambdaLR
 from utils import set_seed, get_optimizer, log, get_lr_scheduler, get_loss
 from utils.get_data import get_data_loader, get_dataset
 from utils.get_model import get_model
-from sklearn.metrics import f1_score, roc_auc_score, average_precision_score
-
+from sklearn.metrics import accuracy_score
 
 def train_one_batch(model, optimizer, criterion, data, lr_s):
     model.train()
-    embeddings = model(data)
-    loss = criterion(embeddings[data.is_neu], data.y[data.is_neu].unsqueeze(-1).float())
+    output = model(data)
+    output = torch_geometric.nn.global_mean_pool(output, data.batch)
+    y = data.y.float().unsqueeze(0)
+    
+    loss = criterion(output, y)
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
     if lr_s is not None and isinstance(lr_s, LambdaLR):
         lr_s.step()
-    return loss.item(), embeddings.detach()
+    return loss.item(), output.detach()
 
 @torch.no_grad()
 def eval_one_batch(model, optimizer, criterion, data, lr_s):
     model.eval()
-    embeddings = model(data)
-    loss = criterion(embeddings[data.is_neu], data.y[data.is_neu].unsqueeze(-1).float())
-    return loss.item(), embeddings.detach()
+    output = model(data)
+    output = torch_geometric.nn.global_mean_pool(output, data.batch)
+    y = data.y.float().unsqueeze(0)
+    loss = criterion(output, y)
+    return loss.item(), output.detach()
 
 def run_one_epoch(model, optimizer, criterion, data_loader, phase, epoch, device, metrics, lr_s):
     run_one_batch = train_one_batch if phase == "train" else eval_one_batch
     phase = "test " if phase == "test" else phase
-
     pbar = tqdm(data_loader, disable=__name__ != "__main__")
+    total_loss = 0
+    total_correct = 0
+    total_samples = 0
+
     for idx, data in enumerate(pbar):
         data = data.to(device)
-        batch_loss, batch_embeddings = run_one_batch(model, optimizer, criterion, data, lr_s)
-        batch_auc = update_metrics(metrics, data, batch_embeddings)
+        batch_loss, batch_output = run_one_batch(model, optimizer, criterion, data, lr_s)
+        
+        # Calculate accuracy
+        predicted = torch.argmax(batch_output, dim=1)
+        actual = torch.argmax(data.y, dim=0)
+        correct = (predicted == actual).item()
+        
+        total_loss += batch_loss
+        total_correct += correct
+        total_samples += 1
+        
+        batch_acc = correct / 1
+        
         metrics["loss"].update(batch_loss)
+        metrics["accuracy"].update(batch_acc)
 
-        desc = f"[Epoch {epoch}] {phase}, loss: {batch_loss:.4f}, auc: {batch_auc:.4f}"
+        desc = f"[Epoch {epoch}] {phase}, loss: {batch_loss:.4f}, acc: {batch_acc:.4f}"
         if idx == len(data_loader) - 1:
-            metric_res = compute_metrics(metrics)
-            loss, auc, f1, roc = metric_res["loss"], metric_res["auc"], metric_res["f1"], metric_res["roc"]
-            desc = f"[Epoch {epoch}] {phase}, loss: {loss:.5f}, auc: {auc:.4f}, f1: {f1:.4f}, roc: {roc:.4f}"
+            avg_loss = total_loss / len(data_loader)
+            avg_acc = total_correct / total_samples
+            desc = f"[Epoch {epoch}] {phase}, loss: {avg_loss:.4f}, acc: {avg_acc:.4f}"
             reset_metrics(metrics)
         pbar.set_description(desc)
+    
+    metric_res = {
+        "loss": total_loss / len(data_loader),
+        "accuracy": total_correct / total_samples,
+    }
     return metric_res
 
 def reset_metrics(metrics):
@@ -63,23 +89,18 @@ def reset_metrics(metrics):
             metric.reset()
 
 def compute_metrics(metrics):
-    return {f"{name}": metrics[f"{name}"].compute().item() for name in ["auc", "f1", "roc"]} | {
+    return {f"{name}": metrics[f"{name}"].compute().item() for name in ["accuracy"]} | {
         "loss": metrics["loss"].compute().item()
     }
 
-def update_metrics(metrics, data, embeddings):
-    pred = (embeddings > 0.5).int()[data.is_neu].cpu()
-    label = data.y[data.is_neu].cpu()
-    embeddings = embeddings[data.is_neu].cpu()
+def update_metrics(metrics, labels, outputs):
+    pred = outputs.argmax(dim=1).cpu()
+    labels = labels.cpu()
 
-    auc = average_precision_score(label, embeddings)
-    roc = roc_auc_score(label, embeddings)
-    f1 = f1_score(label, pred)
+    acc = accuracy_score(labels, pred)
 
-    metrics["auc"].update(auc)
-    metrics["f1"].update(f1)
-    metrics["roc"].update(roc)
-    return auc
+    metrics["accuracy"].update(acc)
+    return acc
 
 def run_one_seed(config, tune=False):
     device = torch.device(config["device"] if torch.cuda.is_available() else "cpu")
@@ -101,9 +122,9 @@ def run_one_seed(config, tune=False):
     dataset = get_dataset(dataset_name, dataset_dir)
     loaders = get_data_loader(dataset, dataset.idx_split, batch_size=config["batch_size"])
 
-    model = get_model(model_name, config["model_kwargs"], dataset)
-    if config.get("only_flops", False):
-        raise RuntimeError
+    model_kwargs = config['model_kwargs']
+    # model_kwargs['num_classes'] = config['model_kwargs']['num_classes']  # Ensure this line exists
+    model = get_model(model_name, model_kwargs, dataset)
     if config.get("resume", False):
         log(f"Resume from {config['resume']}")
         model_path = dataset_dir / "logs" / (config["resume"] + "/best_model.pt")
@@ -117,7 +138,7 @@ def run_one_seed(config, tune=False):
     criterion = get_loss(config["loss_name"], config["loss_kwargs"])
 
     main_metric = config["main_metric"]
-    metric_names = ["auc", "f1", "roc"]
+    metric_names = ["accuracy"]
     metrics = {f"{name}": MeanMetric() for name in metric_names}
     metrics["loss"] = MeanMetric()
 
@@ -129,14 +150,13 @@ def run_one_seed(config, tune=False):
         layout = {
             "Gap": {
                 "loss": ["Multiline", ["train/loss", "valid/loss", "test/loss"]],
-                "auc": ["Multiline", ["train/auc", "valid/auc", "test/auc"]],
+                "accuracy": ["Multiline", ["train/accuracy", "valid/accuracy", "test/accuracy"]],
             }
         }
         writer.add_custom_scalars(layout)
 
     for epoch in range(config["num_epochs"]):
-        if not config.get("only_eval", False):
-            train_res = run_one_epoch(model, opt, criterion, loaders["train"], "train", epoch, device, metrics, lr_s)
+        train_res = run_one_epoch(model, opt, criterion, loaders["train"], "train", epoch, device, metrics, lr_s)
         valid_res = run_one_epoch(model, opt, criterion, loaders["valid"], "valid", epoch, device, metrics, lr_s)
         test_res = run_one_epoch(model, opt, criterion, loaders["test"], "test", epoch, device, metrics, lr_s)
 
@@ -162,10 +182,9 @@ def run_one_seed(config, tune=False):
                 for k, v in res.items():
                     writer.add_scalar(f"best_{phase}/{k}", v, epoch)
 
-
 def main():
     parser = argparse.ArgumentParser(description="Train a model for jet classification.")
-    parser.add_argument("-m", "--model", type=str, default="gcn")
+    parser.add_argument("-m", "--model", type=str, default="hept")
     args = parser.parse_args()
 
     if args.model in ["gcn", "gatedgnn", "dgcnn", "gravnet"]:
@@ -177,4 +196,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    

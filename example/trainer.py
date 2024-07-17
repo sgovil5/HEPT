@@ -69,14 +69,14 @@ def run_one_epoch(model, optimizer, criterion, data_loader, phase, epoch, device
         
         # Calculate accuracy
         predicted = torch.argmax(batch_embeddings, dim=1)
-        actual = data.y 
-        correct = (predicted == actual).sum().item()
+        actual = torch.argmax(data.y, dim=0)
+        correct = (predicted == actual).item()
         
         total_loss += batch_loss
         total_correct += correct
-        total_samples += data.y.size(0)
+        total_samples += 1
         
-        batch_acc = correct / data.y.size(0)
+        batch_acc = correct / 1
         
         metrics["loss"].update(batch_loss)
         metrics["accuracy"].update(batch_acc)
